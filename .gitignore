@@ -1,0 +1,12 @@
+/.venv/
+__pycache__/
+*.py[cod]
+
+/data/
+/data_processed/
+/results/
+/smoke_test/output/
+*.mat
+
+/.idea/
+/.vscode/
