@@ -1,9 +1,12 @@
+from copy import deepcopy
+from unittest.mock import patch
+
 import numpy as np
 import torch
 from torch.nn.functional import cross_entropy
 
 import config
-from model import EEGDeformer, log_mean_power
+from model import EEGDeformer, EEGDeformerDataParallel, log_mean_power
 
 
 OUTPUT_DIR = config.PROJECT_DIR / "smoke_test" / "output"
@@ -56,6 +59,32 @@ def check_log_power():
     torch.testing.assert_close(log_mean_power(small), expected)
 
 
+def check_parallel_projection(eeg, labels):
+    model = EEGDeformer(eeg.shape[-1])
+    with torch.no_grad():
+        for conv in model.encoder[:2]:
+            conv.weight.mul_(20)
+            assert (conv.weight.flatten(1).norm(dim=1) > conv.max_norm).any()
+
+    def replica_forward(parallel, inputs, **kwargs):
+        replica = deepcopy(parallel.module)
+        for source, target in zip(parallel.module.encoder[:2], replica.encoder[:2], strict=True):
+            norms = source.weight.detach().flatten(1).norm(dim=1)
+            assert (norms <= source.max_norm + 1e-6).all()
+            # unbind 返回多个视图，模拟 DataParallel 副本权重的原地修改限制。
+            view, _ = torch.stack((source.weight, source.weight)).unbind()
+            del target.weight
+            target.weight = view
+        return replica(inputs, **kwargs)
+
+    with patch.object(torch.nn.DataParallel, "forward", replica_forward):
+        logits = EEGDeformerDataParallel(model)(eeg)
+        cross_entropy(logits, labels).backward()
+
+    for conv in model.encoder[:2]:
+        assert conv.weight.grad is not None and torch.isfinite(conv.weight.grad).all()
+
+
 def main():
     archive_file = OUTPUT_DIR / "benchmark.npz"
     report_file = OUTPUT_DIR / "model_report.txt"
@@ -71,8 +100,10 @@ def main():
         for count in archive["window_samples"]:
             eeg = torch.from_numpy(archive[f"eeg_{count}"][0, :BATCH_SIZE])
             report.append(check_batch(eeg, labels))
+            check_parallel_projection(eeg, labels)
     check_log_power()
     report.append("真实样本前向、反向及单样本推理通过，DIP 零功率和半精度平方检查通过。")
+    report.append("CPU 模拟并行副本的权重视图，确认最大范数约束先于复制，梯度可回传到主模型。")
 
     summary = "\n".join(report) + "\n"
     report_file.write_text(summary, encoding="utf-8")

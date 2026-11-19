@@ -11,9 +11,11 @@ class MaxNormConv2d(nn.Conv2d):
         super().__init__(*args, **kwargs)
         self.max_norm = max_norm
 
+    @torch.no_grad()
+    def project_weight(self):
+        self.weight.renorm_(p=2, dim=0, maxnorm=self.max_norm)
+
     def forward(self, x):
-        with torch.no_grad():
-            self.weight.renorm_(p=2, dim=0, maxnorm=self.max_norm)
         # 保留本次前向的权重值，后续前向的约束操作不影响这次反向。
         return self._conv_forward(x, self.weight.clone(), self.bias)
 
@@ -128,10 +130,16 @@ class EEGDeformer(nn.Module):
         )
         self.classifier = nn.Linear(num_filters * (widths[-1] + depth), num_classes)
 
-    def forward(self, eeg):
+    def project_encoder_weights(self):
+        self.encoder[0].project_weight()
+        self.encoder[1].project_weight()
+
+    def forward(self, eeg, *, project_weights=True):
         if eeg.ndim != 3 or eeg.shape[1:] != self.input_shape:
             raise ValueError(f"预期输入为 [批大小, {self.input_shape[0]}, {self.input_shape[1]}]，收到 {tuple(eeg.shape)}")
 
+        if project_weights:
+            self.project_encoder_weights()
         encoded = self.encoder(eeg.unsqueeze(1)).squeeze(2)
         features = (encoded + self.position).to(dtype=encoded.dtype)
         powers = []
@@ -142,3 +150,10 @@ class EEGDeformer(nn.Module):
         # DIP 拼接末层主干特征和各层细粒度分支的对数平均功率。
         embedding = torch.cat([features.flatten(start_dim=1), *powers], dim=-1)
         return self.classifier(embedding)
+
+
+class EEGDeformerDataParallel(nn.DataParallel):
+    def forward(self, eeg):
+        # 先约束主模型参数，避免在副本中原地修改 Broadcast 的视图。
+        self.module.project_encoder_weights()
+        return super().forward(eeg, project_weights=False)

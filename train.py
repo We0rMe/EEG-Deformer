@@ -10,14 +10,13 @@ import numpy as np
 import torch
 from filelock import FileLock
 from matplotlib.figure import Figure
-from torch import nn
 from torch.nn.functional import cross_entropy
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, TensorDataset
 
 import config
-from model import EEGDeformer
+from model import EEGDeformer, EEGDeformerDataParallel
 from preprocess import get_window_samples
 
 
@@ -128,7 +127,7 @@ def make_model(num_samples, device, cuda_ids):
         heads=config.ATTENTION_HEADS, head_dim=config.ATTENTION_HEAD_DIM, ff_dim=config.FEEDFORWARD_DIM,
         dropout=config.MODEL_DROPOUT, max_norm=config.ENCODER_MAX_NORM,
     ).to(device)
-    network = nn.DataParallel(model, device_ids=cuda_ids) if len(cuda_ids) == 2 else model
+    network = EEGDeformerDataParallel(model, device_ids=cuda_ids) if len(cuda_ids) == 2 else model
     return model, network
 
 
