@@ -22,9 +22,14 @@ WINDOW_SECONDS = (0.5, 1.0)       # 分类窗长，可同时指定多个
 BANDPASS_HZ = (8.0, 64.0)         # 巴特沃斯带通的临界频率
 BUTTERWORTH_ORDER = 4             # 巴特沃斯低通原型阶数
 
+# 模型输入，直接使用已滤波的分类窗
+INPUT_TYPE = "complex"   # time 为时域，complex_channels 沿通道拼接实虚部，complex 沿频率拼接
+FFT_RESOLUTION = 0.2              # FFT 频点间距（Hz）
+SPECTRUM_HZ = (8.0, 64.0)        # 复频谱的起止频率（Hz），包含两端
+
 # EEG-Deformer 模型设置
 HCT_DEPTH = 3                    # 级联 HCT 块数
-TEMPORAL_KERNEL = 25             # 时间卷积核长度，250 Hz 下约为 100 ms，须为奇数
+TEMPORAL_KERNEL = 25             # 沿最后一轴的卷积核长度，单位为采样点或频点，须为奇数
 NUM_FILTERS = 64                 # 浅层编码器的卷积核数，也是注意力的 token 数
 ATTENTION_HEADS = 16             # 多头注意力的头数
 ATTENTION_HEAD_DIM = 16          # 每个注意力头的投影维度
@@ -34,7 +39,7 @@ ENCODER_MAX_NORM = 2.0           # 浅层编码器各卷积核的最大 L2 范�
 
 # 训练与评估设置
 RESULTS_DIR = PROJECT_DIR / "results"  # 训练产物目录
-RUN_NAME = "eeg_deformer"       # 实验名，修改配置后用新名字开启实验
+RUN_NAME = "eeg_deformer" if INPUT_TYPE == "time" else f"eeg_deformer_{INPUT_TYPE}"  # 同一输入下改参数可另命名
 LOSO_FOLDS = NUM_SUBJECTS         # 从被试 1 起依次留出的折数
 SEED = 42                        # 每次实验使用一个随机种子
 VALIDATION_FRACTION = 0.20        # 非测试被试中用于验证的比例

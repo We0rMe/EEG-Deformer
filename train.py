@@ -16,6 +16,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, TensorDataset
 
 import config
+from features import input_settings, prepare_inputs
 from model import EEGDeformer, EEGDeformerDataParallel
 from preprocess import get_window_samples
 
@@ -120,9 +121,10 @@ def runtime_details(device, cuda_ids):
     }
 
 
-def make_model(num_samples, device, cuda_ids):
+def make_model(input_shape, device, cuda_ids):
+    num_channels, length = input_shape
     model = EEGDeformer(
-        num_samples, num_channels=len(config.CHANNELS), num_classes=config.NUM_CLASSES,
+        length, num_channels=num_channels, num_classes=config.NUM_CLASSES,
         depth=config.HCT_DEPTH, temporal_kernel=config.TEMPORAL_KERNEL, num_filters=config.NUM_FILTERS,
         heads=config.ATTENTION_HEADS, head_dim=config.ATTENTION_HEAD_DIM, ff_dim=config.FEEDFORWARD_DIM,
         dropout=config.MODEL_DROPOUT, max_norm=config.ENCODER_MAX_NORM,
@@ -244,7 +246,7 @@ def train_fold(eeg, labels, subject_ids, split, fold_dir, device, cuda_ids):
 
     torch.manual_seed(config.SEED)
     shuffle = torch.Generator().manual_seed(config.SEED)
-    model, network = make_model(eeg.shape[-1], device, cuda_ids)
+    model, network = make_model(eeg.shape[-2:], device, cuda_ids)
     optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS)
     history, best_epoch, best_model = [], 0, None
@@ -320,19 +322,27 @@ def train_experiment(data_file, run_dir):
                 "CHANNELS", "NUM_CLASSES", "HCT_DEPTH", "TEMPORAL_KERNEL", "NUM_FILTERS", "ATTENTION_HEADS",
                 "ATTENTION_HEAD_DIM", "FEEDFORWARD_DIM", "MODEL_DROPOUT", "ENCODER_MAX_NORM",
             )
-            save_manifest(artifacts / "run.json", {
+            feature_options = input_settings()
+            manifest = {
                 "data_sha256": data_hash, "sampling_rate_hz": config.SAMPLING_RATE_HZ,
                 "window_samples": sample_counts, "runtime": runtime_details(device, cuda_ids),
                 "settings": {name: getattr(config, name) for name in options}, "splits": splits,
-            })
+            }
+            # 早期时域实验没有 input 字段，保留同一断点格式。
+            if config.INPUT_TYPE != "time":
+                manifest["input"] = feature_options
+            save_manifest(artifacts / "run.json", manifest)
 
-            table = ["# 训练汇总", "", "| 窗长 | 完成折数 | 最佳验证 ACC（均值 ± 标准差） | 累计训练时间（s） |",
+            table = ["# 训练汇总", "", f"模型输入为 `{config.INPUT_TYPE}`。", "",
+                     "| 窗长 | 完成折数 | 最佳验证 ACC（均值 ± 标准差） | 累计训练时间（s） |",
                      "| --- | ---: | ---: | ---: |"]
             for count in sample_counts:
                 eeg = archive[f"eeg_{count}"]
                 expected = (len(subject_ids), len(labels), len(config.CHANNELS), count)
                 if eeg.shape != expected:
                     raise ValueError(f"eeg_{count} 尺寸为 {eeg.shape}，预期为 {expected}")
+                eeg = prepare_inputs(eeg, config.SAMPLING_RATE_HZ, feature_options)
+                print(f"{count} 点分类窗，{config.INPUT_TYPE} 输入形状 {eeg.shape[-2:]}", flush=True)
                 scores, total_seconds = [], 0.0
                 for split in splits:
                     fold_name = f"{count}pt_s{split['test']:02d}"

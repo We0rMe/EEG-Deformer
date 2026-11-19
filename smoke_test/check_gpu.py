@@ -8,6 +8,7 @@ from torch.optim import Adam
 from torch.profiler import ProfilerActivity, profile, supported_activities
 
 import config
+from features import input_settings, prepare_inputs
 from preprocess import get_window_samples
 from train import (
     batch_step, check_archive, configure_runtime, loso_splits, make_model, runtime_details, subject_loader,
@@ -23,7 +24,7 @@ def probe_window(eeg, labels, subject_ids, train_ids, device, cuda_ids):
     batches = iter(loader)
     if len(loader.dataset) // config.BATCH_SIZE < config.GPU_WARMUP_BATCHES + config.GPU_PROBE_BATCHES + 1:
         raise ValueError("训练样本不足以提供所需的完整预热和计时 batch")
-    model, network = make_model(eeg.shape[-1], device, cuda_ids)
+    model, network = make_model(eeg.shape[-2:], device, cuda_ids)
     optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
     def synchronize():
@@ -91,17 +92,20 @@ def main():
         raise ValueError('请将 DEVICE 设为 "cuda"，并指定参与检查的 GPU')
     sample_counts = get_window_samples(config.WINDOW_SECONDS)
     report = runtime_details(device, cuda_ids)
+    report["input"] = input_settings()
     report.update({"warmup_batches": config.GPU_WARMUP_BATCHES, "timed_batches": config.GPU_PROBE_BATCHES, "windows": {}})
     with np.load(config.PROCESSED_FILE, allow_pickle=False) as archive:
         check_archive(archive, sample_counts)
         subject_ids, labels = archive["subject_ids"], archive["labels"]
         split = loso_splits(subject_ids, 1, config.VALIDATION_FRACTION, config.SEED)[0]
         for count in sample_counts:
-            print(f"正在检查 {count} 点输入", flush=True)
+            eeg = prepare_inputs(archive[f"eeg_{count}"], config.SAMPLING_RATE_HZ, report["input"])
+            print(f"正在检查 {count} 点分类窗，模型输入形状 {eeg.shape[-2:]}", flush=True)
             report["windows"][str(count)] = probe_window(
-                archive[f"eeg_{count}"], labels, subject_ids, split["train"], device, cuda_ids,
+                eeg, labels, subject_ids, split["train"], device, cuda_ids,
             )
-    output = config.PROJECT_DIR / "smoke_test" / "output" / "gpu_report.json"
+    filename = "gpu_report.json" if config.INPUT_TYPE == "time" else f"gpu_report_{config.INPUT_TYPE}.json"
+    output = config.PROJECT_DIR / "smoke_test" / "output" / filename
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"GPU 检查结果已保存到 {output}", flush=True)

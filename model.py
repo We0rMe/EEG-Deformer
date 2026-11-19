@@ -80,7 +80,7 @@ def log_mean_power(features):
 
 
 class EEGDeformer(nn.Module):
-    """输入 [批大小, 通道, 采样点]，输出 [批大小, 类别数] 的 logits。"""
+    """输入 [批大小, 输入通道, 采样点或频点]，输出分类 logits。"""
 
     def __init__(
         self,

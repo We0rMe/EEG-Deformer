@@ -6,6 +6,7 @@ import torch
 from torch.nn.functional import cross_entropy
 
 import config
+from features import input_settings, prepare_inputs
 from model import EEGDeformer, EEGDeformerDataParallel, log_mean_power
 
 
@@ -15,7 +16,7 @@ BATCH_SIZE = 4
 
 def check_batch(eeg, labels):
     num_samples = eeg.shape[-1]
-    model = EEGDeformer(num_samples)
+    model = EEGDeformer(num_samples, num_channels=eeg.shape[-2])
     branch_widths = []
 
     def record_widths(_module, _inputs, outputs):
@@ -45,7 +46,7 @@ def check_batch(eeg, labels):
     assert prediction.shape == (1, config.NUM_CLASSES) and torch.isfinite(prediction).all()
 
     length_trace = " → ".join(map(str, [num_samples, num_samples // 2, *widths]))
-    return f"{num_samples} 点输入，时间维 {length_trace}，logits {tuple(logits.shape)}"
+    return f"输入 {tuple(eeg.shape)}，末轴 {length_trace}，logits {tuple(logits.shape)}"
 
 
 def check_log_power():
@@ -98,9 +99,18 @@ def main():
     with np.load(archive_file, allow_pickle=False) as archive:
         labels = torch.from_numpy(archive["labels"][:BATCH_SIZE])
         for count in archive["window_samples"]:
-            eeg = torch.from_numpy(archive[f"eeg_{count}"][0, :BATCH_SIZE])
-            report.append(check_batch(eeg, labels))
-            check_parallel_projection(eeg, labels)
+            trials = archive[f"eeg_{count}"][:1, :BATCH_SIZE]
+            check_parallel_projection(torch.from_numpy(trials[0]), labels)
+            # 独立使用完整 FFT 建立参考，核对实虚部顺序、端点和归一化。
+            spectrum = np.fft.fft(trials, n=1250, axis=-1)[..., 40:321] / count
+            for layout in ("time", "complex_channels", "complex"):
+                with patch.multiple(config, INPUT_TYPE=layout, FFT_RESOLUTION=0.2, SPECTRUM_HZ=(8, 64)):
+                    features = prepare_inputs(trials, 250, input_settings())
+                expected = trials if layout == "time" else np.concatenate(
+                    (spectrum.real, spectrum.imag), axis=-2 if layout == "complex_channels" else -1,
+                )
+                np.testing.assert_allclose(features, expected, rtol=1e-5, atol=1e-6)
+                report.append(f"{count} 点窗 {layout}  " + check_batch(torch.from_numpy(features[0]), labels))
     check_log_power()
     report.append("真实样本前向、反向及单样本推理通过，DIP 零功率和半精度平方检查通过。")
     report.append("CPU 模拟并行副本的权重视图，确认最大范数约束先于复制，梯度可回传到主模型。")

@@ -24,6 +24,20 @@
 
 ## EEG-Deformer 模型
 
+### 选择时域或复频谱输入
+
+在 `config.py` 设置 `INPUT_TYPE`。本次默认 `"complex_channels"`。训练和 GPU 预热均直接读取已有的 `data_processed/benchmark.npz`，每个窗长在内存中转换一次，所有 LOSO 折复用。频谱变换逐试次进行。
+
+| `INPUT_TYPE` | 单试次输入 | 最后一轴 |
+| --- | --- | --- |
+| `time` | `[9, 125]` 或 `[9, 250]` | 时间采样点 |
+| `complex_channels` | `[18, 281]` | 频点。前九行是各通道实部，后九行是对应虚部 |
+| `complex` | `[9, 562]` | 每行依次排列 281 个实部和 281 个虚部 |
+
+两种复频谱输入均对滤波后的原窗沿时间轴做实数 FFT。在 250 Hz 采样率下补零到 1250 点，保留 8–64 Hz 的频点（含两端），实部和虚部均除以原窗的 125 或 250 个采样点。两个窗长仍独立训练。使用 `complex_channels` 时，卷积和池化沿频率轴进行，默认三级 HCT 的长度依次为 `281 → 140 → 70 → 35 → 17`。
+
+### 时域基线结构
+
 使用 `model.EEGDeformer(num_samples=125)` 或 `model.EEGDeformer(num_samples=250)` 为对应窗长创建模型。输入为 `[批大小, 9, 采样点]`，输出为 `[批大小, 40]` 的 logits。模型参数在 `config.py` 中设置，`HCT_DEPTH` 默认是 3，设为 4 可使用官方示例的深度。250 Hz 下，浅层编码器和 HCT 的细粒度分支均使用 25 点时间卷积核。池化按官方实现向下取整，125 点和 250 点的时间维分别为 `125 → 62 → 31 → 15 → 7` 和 `250 → 125 → 62 → 31 → 15`。 [论文 §III、§IV-D](https://arxiv.org/html/2405.00719v1) · [官方模型](https://github.com/yi-ding-cs/EEG-Deformer/blob/main/models/EEGDeformer.py)
 
 浅层编码器依次提取时间和空间特征，并对卷积核应用最大范数约束。HCT 的粗粒度分支沿卷积核对应的 token 轴做注意力，细粒度分支沿时间轴做卷积，两路相加。DIP 将各层细粒度分支的对数平均功率与末层主干特征拼接。功率在半精度输入时用 `float32` 计算，并在取对数前设置数值下限。模型依据论文和官方实现编写。 [上游 CBCR 许可证与版权声明](https://github.com/yi-ding-cs/EEG-Deformer/blob/main/CBCR%20License)
@@ -67,16 +81,16 @@ python3.12 -m venv .venv
 
 `DEVICE = "cuda"` 时，`CUDA_DEVICE_IDS = (0,)` 用单卡，`(0, 1)` 用 `DataParallel` 双卡。`BATCH_SIZE` 是两卡合计的 batch 大小。默认使用 FP32、关闭 TF32 并启用确定性算法。`DEVICE = "cpu"` 可在 CPU 运行。
 
-正式训练前，先在服务器按计划使用的设备、batch 和精度运行预热检查。它从第一折训练被试读取真实数据，每个窗长执行 3 个预热 batch、5 个计时 batch 和 1 个用于记录算子的训练 batch。`smoke_test/output/gpu_report.json` 记录实际张量尺寸和 dtype、梯度检查、单 batch 耗时、显存峰值、观察到的算子及后端设置。完成后可把该报告发回核对。下面是 Linux SSH 命令。
+在服务器的训练环境中先运行 GPU 预热。它从第一折训练被试读取真实数据，每个窗长执行 3 个预热 batch、5 个计时 batch 和 1 个记录算子的训练 batch。本次结果写入 `smoke_test/output/gpu_report_complex_channels.json`，其中包含输入设置、张量形状、梯度检查、耗时、显存峰值和实际后端。时域检查仍写入 `gpu_report.json`。
 
 ```bash
-.venv/bin/python -m smoke_test.check_gpu
+python -m smoke_test.check_gpu
 ```
 
-核对预热结果后，在服务器运行 `.venv/bin/python train.py`。同一实验目录重复执行会从最近已提交的 epoch 恢复。每个 epoch 结束即保存日志、checkpoint 和更新曲线。更改数据、设备或训练参数时，使用新的 `RUN_NAME`。
+核对预热结果后，在同一环境运行 `python train.py`。结果目录默认按输入类型命名，时域基线沿用 `eeg_deformer_seed42`。同一实验目录重复执行会从最近已提交的 epoch 恢复。每个 epoch 结束即保存日志、checkpoint 和更新曲线。若在同一种输入下更改频谱参数、设备或训练参数，请另设 `RUN_NAME`。
 
 ```text
-results/benchmark_deformer_seed42/
+results/eeg_deformer_complex_channels_seed42/
 ├── report.md                  # 所有折完成后的验证 ACC 汇总和累计训练时间
 ├── artifacts/run.json         # 配置、设备、数据指纹和每折的被试划分
 └── 125pt_s01/                 # 125 点窗，留出 S1
