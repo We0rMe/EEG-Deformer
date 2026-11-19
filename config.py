@@ -43,7 +43,7 @@ BATCH_SIZE = 64                   # 总 batch 大小，双卡时由两张卡分�
 LEARNING_RATE = 1e-3              # Adam 初始学习率，随后做余弦退火
 WEIGHT_DECAY = 1e-5               # Adam 权重衰减系数
 DEVICE = "cuda"                   # 训练设备，可设为 "cpu" 或 "cuda"
-CUDA_DEVICE_IDS = (0,)           # 单卡用 (0,)，双卡用 (0, 1)
+CUDA_DEVICE_IDS = (0,1)           # 单卡用 (0,)，双卡用 (0, 1)
 DETERMINISTIC = True              # 启用确定性算法，并关闭 cuDNN 自动寻优
 ALLOW_TF32 = False                # CUDA 下允许 FP32 矩阵乘和卷积使用 TF32
 ITR_GAZE_SHIFT_SECONDS = 0.5      # ITR 中 T = 窗长 + 视线转移时间
