@@ -34,7 +34,7 @@ ENCODER_MAX_NORM = 2.0           # 浅层编码器各卷积核的最大 L2 范�
 
 # 训练与评估设置
 RESULTS_DIR = PROJECT_DIR / "results"  # 训练产物目录
-RUN_NAME = "benchmark_deformer"       # 实验名，修改配置后用新名字开启实验
+RUN_NAME = "eeg_deformer"       # 实验名，修改配置后用新名字开启实验
 LOSO_FOLDS = NUM_SUBJECTS         # 从被试 1 起依次留出的折数
 SEED = 42                        # 每次实验使用一个随机种子
 VALIDATION_FRACTION = 0.20        # 非测试被试中用于验证的比例

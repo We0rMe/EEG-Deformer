@@ -5,6 +5,7 @@ __pycache__/
 /data/
 /data_processed/
 /results/
+/smoke_test/
 /smoke_test/output/
 *.mat
 
